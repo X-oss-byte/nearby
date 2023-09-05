@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "gmock/gmock.h"
 #include "protobuf-matchers/protocol-buffer-matchers.h"
@@ -25,6 +26,7 @@
 #include "connections/advertising_options.h"
 #include "connections/discovery_options.h"
 #include "connections/implementation/flags/nearby_connections_feature_flags.h"
+#include "connections/implementation/mock_device.h"
 #include "connections/implementation/offline_simulation_user.h"
 #include "connections/listeners.h"
 #include "connections/medium_selector.h"
@@ -33,6 +35,7 @@
 #include "connections/status.h"
 #include "connections/strategy.h"
 #include "internal/flags/nearby_flags.h"
+#include "internal/interop/device.h"
 #include "internal/platform/byte_array.h"
 #include "internal/platform/count_down_latch.h"
 #include "internal/platform/input_stream.h"
@@ -242,6 +245,26 @@ TEST_P(OfflineServiceControllerTest, CanConnect) {
               Eq(Status{Status::kSuccess}));
   EXPECT_TRUE(discover_latch_.Await(kLongTimeout));
   EXPECT_THAT(user_b.RequestConnection(&connect_latch_),
+              Eq(Status{Status::kSuccess}));
+  EXPECT_TRUE(connect_latch_.Await(kLongTimeout));
+  user_a.Stop();
+  user_b.Stop();
+  env_.Stop();
+}
+
+TEST_P(OfflineServiceControllerTest, CanConnectV3) {
+  env_.Start();
+  OfflineSimulationUser user_a(kDeviceA, GetParam());
+  OfflineSimulationUser user_b(kDeviceB, GetParam());
+  EXPECT_THAT(user_a.StartAdvertising(std::string(kServiceId), &connect_latch_),
+              Eq(Status{Status::kSuccess}));
+  EXPECT_THAT(user_b.StartDiscovery(std::string(kServiceId), &discover_latch_),
+              Eq(Status{Status::kSuccess}));
+  EXPECT_TRUE(discover_latch_.Await(kLongTimeout));
+  auto remote_device = MockNearbyDevice();
+  ON_CALL(remote_device, GetEndpointId)
+      .WillByDefault(testing::Return(user_b.GetDiscovered().endpoint_id));
+  EXPECT_THAT(user_b.RequestConnectionV3(&connect_latch_, remote_device),
               Eq(Status{Status::kSuccess}));
   EXPECT_TRUE(connect_latch_.Await(kLongTimeout));
   user_a.Stop();

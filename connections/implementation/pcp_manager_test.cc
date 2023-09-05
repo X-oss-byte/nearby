@@ -16,6 +16,7 @@
 
 #include <array>
 #include <string>
+#include <vector>
 
 #include "gmock/gmock.h"
 #include "protobuf-matchers/protocol-buffer-matchers.h"
@@ -25,6 +26,7 @@
 #include "connections/implementation/simulation_user.h"
 #include "connections/medium_selector.h"
 #include "connections/v3/connection_listening_options.h"
+#include "internal/interop/device.h"
 #include "internal/platform/count_down_latch.h"
 #include "internal/platform/medium_environment.h"
 
@@ -64,6 +66,23 @@ constexpr BooleanMediumSelector kTestCases[] = {
         .ble = true,
         .wifi_lan = true,
     },
+};
+
+class FakeNearbyDevice : public NearbyDevice {
+ public:
+  NearbyDevice::Type GetType() const override {
+    return NearbyDevice::Type::kUnknownDevice;
+  }
+  std::string GetEndpointId() const override { return endpoint_id_; }
+  void SetEndpointId(const std::string& endpoint_id) {
+    endpoint_id_ = endpoint_id;
+  }
+  MOCK_METHOD(std::vector<ConnectionInfoVariant>, GetConnectionInfos, (),
+              (const override));
+  MOCK_METHOD(std::string, ToProtoBytes, (), (const override));
+
+ private:
+  std::string endpoint_id_;
 };
 
 class PcpManagerTest : public ::testing::TestWithParam<BooleanMediumSelector> {
@@ -200,6 +219,26 @@ TEST_P(PcpManagerTest, StartListeningForIncomingConnectionsFailsNoStrategy) {
   user_a.StartListeningForIncomingConnections(&start_latch, "service", options,
                                               {Status::kError});
   user_a.Stop();
+  env_.Stop();
+}
+
+TEST_P(PcpManagerTest, CanConnectV3) {
+  env_.Start();
+  SimulationUser user_a("device-a", GetParam());
+  SimulationUser user_b("device-b", GetParam());
+  CountDownLatch discovery_latch(1);
+  CountDownLatch connection_latch(2);
+  user_a.StartAdvertising(kServiceId, &connection_latch);
+  user_b.StartDiscovery(kServiceId, &discovery_latch);
+  EXPECT_TRUE(discovery_latch.Await(absl::Milliseconds(1000)).result());
+  EXPECT_EQ(user_b.GetDiscovered().service_id, kServiceId);
+  EXPECT_EQ(user_b.GetDiscovered().endpoint_info, user_a.GetInfo());
+  auto remote_device = FakeNearbyDevice();
+  remote_device.SetEndpointId(user_b.GetDiscovered().endpoint_id);
+  user_b.RequestConnectionV3(&connection_latch, remote_device);
+  EXPECT_TRUE(connection_latch.Await(absl::Milliseconds(1000)).result());
+  user_a.Stop();
+  user_b.Stop();
   env_.Stop();
 }
 
